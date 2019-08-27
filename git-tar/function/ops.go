@@ -113,7 +113,6 @@ func makeTar(pushEvent sdk.PushEvent, filePath string, services *stack.Services)
 			return nil, configErr
 		}
 
-		// fmt.Println("Base: ", base, filePath, k)
 		err = filepath.Walk(base, func(path string, f os.FileInfo, pathErr error) error {
 			if pathErr != nil {
 				return pathErr
@@ -136,14 +135,12 @@ func makeTar(pushEvent sdk.PushEvent, filePath string, services *stack.Services)
 			}
 
 			header.Name = strings.TrimPrefix(path, base)
-			// log.Printf("header.Name '%s'\n", header.Name)
 			if header.Name != "/config" {
 				header.Name = filepath.Join("context", header.Name)
 			}
 
 			header.Name = strings.TrimPrefix(header.Name, "/")
 
-			// log.Println("tar - header.Name ", header.Name)
 			if err1 = tarWriter.WriteHeader(header); err != nil {
 				return err1
 			}
@@ -180,7 +177,7 @@ func formatImageShaTag(registry string, function *stack.Function, sha string, ow
 
 	sha = sdk.FormatShortSHA(sha)
 
-	imageName = schema.BuildImageName(schema.SHAFormat, imageName, sha, "master")
+	imageName = schema.BuildImageName(schema.BranchAndSHAFormat, imageName, sha, buildBranch())
 
 	var imageRef string
 	sharedRepo := strings.HasSuffix(registry, "/")
@@ -344,8 +341,6 @@ func deploy(tars []tarEntry, pushEvent sdk.PushEvent, stack *stack.Services, sta
 			log.Printf(statusErr.Error())
 		}
 
-		// log.Printf(status.AuthToken)
-
 		fileOpen, err := os.Open(tarEntry.fileName)
 
 		if err != nil {
@@ -409,6 +404,26 @@ func deploy(tars []tarEntry, pushEvent sdk.PushEvent, stack *stack.Services, sta
 		}
 
 		httpReq.Header.Add("Secrets", string(secretsJSON))
+
+		// Marshal user labels
+		if stack.Functions[tarEntry.functionName].Labels != nil {
+			jsonBytes, marshalErr := json.Marshal(stack.Functions[tarEntry.functionName].Labels)
+			if marshalErr != nil {
+				log.Printf("Error marshaling labels for function %s, %s", tarEntry.functionName, marshalErr)
+			}
+
+			httpReq.Header.Add("Labels", string(jsonBytes))
+		}
+
+		// Marshal annotations
+		if stack.Functions[tarEntry.functionName].Annotations != nil {
+			jsonBytes, marshalErr := json.Marshal(stack.Functions[tarEntry.functionName].Annotations)
+			if marshalErr != nil {
+				log.Printf("Error marshaling annotations for function %s, %s", tarEntry.functionName, marshalErr)
+			}
+
+			httpReq.Header.Add("Annotations", string(jsonBytes))
+		}
 
 		res, reqErr := c.Do(httpReq)
 		if reqErr != nil {
@@ -636,4 +651,39 @@ func GitHubCloneURL(pushEvent sdk.PushEvent) (string, error) {
 	}
 
 	return cloneURL, nil
+}
+
+func checkCompatibleTemplates(stack *stack.Services, filePath string) (templatesErr error) {
+	templates, ioErr := existingTemplates(filePath)
+	if templatesErr != nil {
+		templatesErr = ioErr
+	}
+	for functionName, function := range stack.Functions {
+		for templateIndex, template := range templates {
+			if template == function.Language {
+				break
+			} else if templateIndex == len(templates)-1 && template != function.Language {
+				templatesErr = fmt.Errorf("Not supported language: `%s` for function: `%s`",
+					function.Language,
+					functionName,
+				)
+			}
+		}
+	}
+	return templatesErr
+}
+
+func existingTemplates(filePath string) ([]string, error) {
+	var existingTemplates []string
+	templatePath := fmt.Sprintf("%s/template", filePath)
+	files, ioErr := ioutil.ReadDir(templatePath)
+	if ioErr != nil {
+		return nil, fmt.Errorf("error while reading tempates directory: %s", ioErr)
+	}
+	for _, templateFolder := range files {
+		if templateFolder.IsDir() {
+			existingTemplates = append(existingTemplates, templateFolder.Name())
+		}
+	}
+	return existingTemplates, nil
 }

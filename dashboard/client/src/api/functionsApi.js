@@ -22,7 +22,9 @@ class FunctionsApi {
 
   parseFunctionResponse({
     data
-  }, user) {
+  }, userName) {
+    const user = userName.toLowerCase();
+
     data.sort((a, b) => {
       if (
         !a ||
@@ -87,12 +89,14 @@ class FunctionsApi {
         gitDeployTime: item.labels['com.openfaas.cloud.git-deploytime'],
         gitPrivate: isPrivate,
         gitSha: item.labels['com.openfaas.cloud.git-sha'],
+        gitBranch: item.labels['com.openfaas.cloud.git-branch'],
         gitRepoURL: getRepoURL(item.annotations || {}),
         minReplicas: item.labels['com.openfaas.scale.min'],
         maxReplicas: item.labels['com.openfaas.scale.max'],
       };
     });
   }
+
   fetchFunctions(user) {
     const url = `${this.apiBaseUrl}/list-functions?user=${user}`;
     return axios
@@ -134,7 +138,7 @@ class FunctionsApi {
       timePeriod
     } = params;
     try {
-      const url = `${this.apiBaseUrl}/system-metrics?function=${user}-${functionName}&metrics_window=${timePeriod}`;
+      const url = `${this.apiBaseUrl}/system-metrics?function=${user.toLowerCase()}-${functionName}&metrics_window=${timePeriod}`;
       const result = await axios
         .get(url);
       return result.data;

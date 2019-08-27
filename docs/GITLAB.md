@@ -4,6 +4,10 @@ If you would like to set up OpenFaaS Cloud on GitLab follow the steps below.
 
 ## Intro
 
+Conceptual Diagram:
+
+![GitLab Event](./gitlab-event-conceptual.jpg)
+
 GitLab will work with the steps done in [README.md](/README.md) file and some additional requirements:
 
 * GitLab instance
@@ -36,9 +40,9 @@ In your GitLab instance enter the `Admin area` then `System Hooks`.
 
 In the URL field add the URL of your entrypoint to `gitlab-event` function. Example would be:
 
-* `https://system.domain.xyz/gitlab-event` in case you have of-router running
+* `https://system.domain.xyz/gitlab-event` in case you have the edge-router running
 
-* `https://www.domain.xyz/function/system-gitlab-event` in case you have of-router turned off
+* `https://www.domain.xyz/function/system-gitlab-event` in case you have the edge-router turned off
 
 Set up Secret Token along with the URL.
 
@@ -89,7 +93,9 @@ Follow the steps below to create the token:
 
 ### Apply installation tag
 
-The installation tag gives the OpenFaaS Cloud instance information about whether or not we should build the project on the instance.
+> Note: the latest editions of GitLab have renamed `tag` to `topic`. Look out for this and don't get caught out.
+
+The *installation tag* (or topic) gives the OpenFaaS Cloud instance information about whether or not we should build the project on the instance.
 
 You can set your own tag by choice in `gitlab.yml` file with environmental variable `installation_tag`. When tag is not set we use the default one which is `openfaas-cloud`.
 

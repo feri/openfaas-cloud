@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -23,6 +24,14 @@ var audit sdk.Audit
 // Handle receives events from the GitHub app and checks the origin via
 // HMAC. Valid events are push or installation events.
 func Handle(req []byte) string {
+
+	queryVal := os.Getenv("Http_Query")
+	if values, err := url.ParseQuery(queryVal); err == nil {
+		setupAction := values.Get("setup_action")
+		if setupAction == "install" {
+			return "Installation completed, please return to the installation guide."
+		}
+	}
 
 	if audit == nil {
 		audit = sdk.AuditLogger{}
@@ -46,35 +55,34 @@ func Handle(req []byte) string {
 		return fmt.Sprintf("%s cannot handle event: %s", Source, eventHeader)
 	}
 
-	if sdk.ValidateCustomers() {
-		customersURL := os.Getenv("customers_url")
-
-		customers, getErr := getCustomers(customersURL)
-		if getErr != nil {
-			return getErr.Error()
-		}
-
-		customer := sdk.Customer{}
-		unmarshalErr := json.Unmarshal(req, &customer)
-		if unmarshalErr != nil {
-			return fmt.Sprintf("Error while un-marshaling customers: %s", unmarshalErr.Error())
-		}
-
-		if !validCustomer(customers, customer.Sender.Login) {
-
-			auditEvent := sdk.AuditEvent{
-				Message: "Customer not found",
-				Owner:   customer.Sender.Login,
-				Source:  Source,
-			}
-
-			sdk.PostAudit(auditEvent)
-
-			return fmt.Sprintf("Customer: %s not found in CUSTOMERS file via %s", customer.Sender.Login, customersURL)
-		}
+	customer := sdk.PushEvent{}
+	unmarshalErr := json.Unmarshal(req, &customer)
+	if unmarshalErr != nil {
+		return fmt.Sprintf("Error while un-marshaling customers: %s, value: %s",
+			unmarshalErr.Error(),
+			string(req))
 	}
 
 	if eventHeader == "push" {
+		if sdk.ValidateCustomers() {
+			customersURL := os.Getenv("customers_url")
+			err := validateCustomers(&customer, customersURL)
+			if err != nil {
+				return err.Error()
+			}
+		}
+		if sdk.HmacEnabled() {
+			webhookSecretKey, secretErr := sdk.ReadSecret("github-webhook-secret")
+			if secretErr != nil {
+				return secretErr.Error()
+			}
+
+			validateErr := hmac.Validate(req, xHubSignature, webhookSecretKey)
+			if validateErr != nil {
+				log.Fatal(validateErr)
+			}
+		}
+
 		headers := map[string]string{
 			"X-Hub-Signature": xHubSignature,
 			"X-GitHub-Event":  eventHeader,
@@ -98,6 +106,27 @@ func Handle(req []byte) string {
 		eventHeader == "installation_repositories" ||
 		eventHeader == "integration_installation" {
 
+		event := InstallationRepositoriesEvent{}
+		err := json.Unmarshal(req, &event)
+		if err != nil {
+			return err.Error()
+		}
+
+		if sdk.ValidateCustomers() {
+			customersURL := os.Getenv("customers_url")
+			customer := sdk.PushEvent{
+				Repository: sdk.PushEventRepository{
+					Owner: sdk.Owner{
+						Login: event.Installation.Account.Login,
+					},
+				},
+			}
+
+			err := validateCustomers(&customer, customersURL)
+			if err != nil {
+				return err.Error()
+			}
+		}
 		if sdk.HmacEnabled() {
 			webhookSecretKey, secretErr := sdk.ReadSecret("github-webhook-secret")
 			if secretErr != nil {
@@ -108,12 +137,6 @@ func Handle(req []byte) string {
 			if validateErr != nil {
 				log.Fatal(validateErr)
 			}
-		}
-
-		event := InstallationRepositoriesEvent{}
-		err := json.Unmarshal(req, &event)
-		if err != nil {
-			return err.Error()
 		}
 
 		fmt.Printf("event.Action: %s\n", event.Action)
@@ -325,4 +348,29 @@ func readBool(key string) bool {
 		return val == "true" || val == "1"
 	}
 	return false
+}
+
+func validateCustomers(pushEvent *sdk.PushEvent, customersURL string) error {
+
+	customers, getErr := getCustomers(customersURL)
+	if getErr != nil {
+		return getErr
+	}
+
+	actor := pushEvent.Repository.Owner.Login
+	if !validCustomer(customers, actor) {
+
+		auditEvent := sdk.AuditEvent{
+			Message: "Customer not found",
+			Owner:   actor,
+			Source:  Source,
+		}
+
+		sdk.PostAudit(auditEvent)
+
+		return fmt.Errorf("%s",
+			fmt.Sprintf("Customer: %s not found in CUSTOMERS file via %s", actor,
+				customersURL))
+	}
+	return nil
 }

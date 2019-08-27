@@ -1,6 +1,6 @@
 ## OpenFaaS Cloud installation guide
 
-Installing OpenFaaS Cloud requires some initial setup with GitHub or GitLab and a working installation of OpenFaaS. If you'd like help please see below for how to join the Slack workspace.
+Installing OpenFaaS Cloud (aka OFC) requires some initial setup with GitHub or GitLab and a working installation of OpenFaaS (aka OF). If you'd like help please see below for how to join the Slack workspace.
 
 ### Pre-reqs
 
@@ -226,14 +226,12 @@ Create of-builder, of-buildkit:
 kubectl apply -f ./yaml/core
 ```
 
-(Optional) Deploy NetworkPolicy
+(Optional) Deploy NetworkPolicy. These policies set the following rules:
+* Pods in the `openfaas-fn` namespace only accept traffic from namespaces and pods that have the label `role: openfaas-system`
+* Pods in the `openfaas` namespace only accept traffic from all pods in namespaces with the label `role: openfaas-system`, pods that have the label `role: openfaas-system` in the `openfaas-fn` namespace and finally pods from any namespace that have the label `app: nginx-ingress`(this is to allow traffic from the nginx ingress controller).
+
 ```
 kubectl apply -f ./yaml/network-policy
-```
-
-(Optional) Add a role of "openfaas-system" using a label to the namespace where you deployed Ingress Controller. For example if Ingress Controller is deployed in the namespace `ingress-nginx`:
-```
-kubectl label namespace ingress-nginx role=openfaas-system
 ```
 
 If you don't have Ingress Controller installed in cluster. [Read this](#troubleshoot-network-policies)
@@ -252,7 +250,7 @@ Create of-builder and of-buildkit:
 ./of-builder/deploy_swarm.sh
 ```
 
-### Configure push repository and gateway URL
+### Configure push repository, gateway URL and build branch
 
 In gateway_config.yml
 
@@ -263,11 +261,14 @@ environment:
   audit_url: http://gateway.openfaas:8080/function/audit-event
   repository_url: docker.io/ofcommunity/
   push_repository_url: docker.io/ofcommunity/
+  build_branch: master
 ```
 
 Replace "ofcommunity" with your Docker Hub account i.e. `alexellis2/cloud/` or replace the whole string with the address of your private registry `reg.my-domain.xyz`.
 
 Now set your gateway's public URL in the `gateway_public_url` field.
+
+Set the branch you want ofc to use in the `build_branch` field.
 
 ### Configure pull secret
 
@@ -469,6 +470,7 @@ kubectl get events --sort-by=.metadata.creationTimestamp -n openfaas-fn
 ```
 
 ##### Troubleshoot Network Policies
+
 The NetworkPolicy configuration is designed to work with a Kubernetes IngressController. If you are using a NodePort or LoadBalancer you have to deploy NetworkPolicy below.
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -504,13 +506,13 @@ docker service logs buildshiprun --tail 50
 
 ### Auth
 
-Auth is optional and protects the dashboard from users accessing the page.
+Auth is optional and protects the dashboard from users accessing the page. It is implemented by the edge-router contacting the edge-auth service to validate each HTTP request.
 
 To enable OAuth 2.0 we will need to set up a number of DNS entries or host file entries for local development.
 
 #### Disable auth for local development
 
-If you wish to disable Auth then you can change the router's URL from `http://auth:8080` (on Swarm) or `http://auth.openfaas:8080` (on Kubernetes) to `http://echo:8080` or `http://echo.openfaas:8080` which will by-pass any need for a Cookie or JWT to be established by allowing the "echo" service to act as the authorziation. This works because the echo service will always return "200 OK" to requests.
+If you wish to disable Auth then you can change the edge-router's URL from `http://edge-auth:8080` (on Swarm) or `http://edge-auth.openfaas:8080` (on Kubernetes) to `http://echo:8080` or `http://echo.openfaas:8080` which will by-pass any need for a Cookie or JWT to be established by allowing the "echo" service to act as the authorziation. This works because the echo service will always return "200 OK" to requests.
 
 #### Set host file entries for the router (Option A)
 
@@ -564,9 +566,23 @@ Port 8081 corresponds to the port where you are running the router component.
 
 You will now be presented with your `client_id` and `client_secret` values for the GitHub OAuth 2.0 App. You need these to configure the auth service, which you can deploy in a container or run locally following the instructions in [the auth README](../auth/).
 
-If you are running the router via Kubernetes you may need to edit `core/yaml/of-auth-dep.yml` and update the `client_id` there. The `client_secret` can be created with a Kubernetes secret which is then mounted into the container at runtime.
+If you are running the router via Kubernetes you may need to edit `core/yaml/edge-auth-dep.yml` and update the `client_id` there. The `client_secret` can be created with a Kubernetes secret which is then mounted into the container at runtime.
 
 ## Appendix
+
+### Custom labels
+
+Users can set the following custom labels:
+
+* `com.openfaas.scale.zero` - either to `true` or `false` to enable/disable scale to zero (where the feature is enabled)
+
+### Custom annotations
+
+Users can set the following custom annotations:
+
+* `topic` - the topic annotation is used with the event-connector pattern, if at least one event-connector is installed on the OFC installation.
+
+* `schedule` - the schedule annotation is used with the [cron-connector](https://github.com/zeerorg/cron-connector) function.
 
 ### Dashboard
 
@@ -613,7 +629,7 @@ Set `public_url` to be the URL for the IP / DNS of the OpenFaaS Cloud.
 
 > Don't forget to pull the `node10-express-template`
 
-```
+```sh
 $ cd dashboard
 
 $ faas-cli template pull https://github.com/openfaas-incubator/node10-express-template
@@ -621,7 +637,7 @@ $ faas-cli template pull https://github.com/openfaas-incubator/node10-express-te
 
 > Note: if using dockerhub change the `function` prefix in `stack.yml` with your username
 
-```
+```sh
 $ faas-cli up
 ```
 
@@ -669,6 +685,14 @@ kubeseal --fetch-cert > pub-cert.pem
 
 You will need to distribute or share pub-cert.pem so that people can use this with the OpenFaaS CLI `faas-cli cloud seal` command to seal secrets.
 
+* Patch the service account for the `import-secrets` function
+
+This `ServiceAccount` needs to be patched in place so that the function can perform create / get and update on the SealedSecret CRD:
+
+```sh
+kubectl patch -n openfaas-fn deploy import-secrets -p '{"spec":{"template":{"spec":{"serviceAccountName":"sealedsecrets-importer-rw"}}}}'
+```
+
 ### Custom templates
 
 You can add your own custom templates by re-deploying the `git-tar` function in `stack.yml`.
@@ -679,10 +703,7 @@ In order to do that follow the steps below:
   * Append your own template to the list.
 
 * Re-deploy `git-tar` function from your `stack.yml` with the changed configuration:
+
 ```sh
 $ faas-cli deploy --filter git-tar --gateway=<of_gateway_url>
 ```
-
-### Wildcard domains with of-router
-
-Coming soon

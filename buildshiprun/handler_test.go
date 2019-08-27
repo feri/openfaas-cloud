@@ -6,6 +6,60 @@ import (
 	"testing"
 )
 
+func TestGetEvent_ReadLabels(t *testing.T) {
+
+	want := map[string]string{
+		"com.openfaas.scale": "true",
+	}
+
+	val, _ := json.Marshal(want)
+	os.Setenv("Http_Labels", string(val))
+
+	eventInfo, err := getEventFromEnv()
+	if err != nil {
+		t.Errorf(err.Error())
+		t.Fail()
+	}
+
+	for k, v := range want {
+		if _, ok := eventInfo.Labels[k]; !ok {
+			t.Errorf("want %s to be present in event.Labels", k)
+			continue
+		}
+		if vv, _ := eventInfo.Labels[k]; vv != v {
+			t.Errorf("value of %s, want: %s, got %s", k, v, vv)
+		}
+
+	}
+}
+
+func TestGetEvent_ReadAnnotations(t *testing.T) {
+
+	want := map[string]string{
+		"topic": "function.deployed",
+	}
+
+	val, _ := json.Marshal(want)
+	os.Setenv("Http_Annotations", string(val))
+
+	eventInfo, err := getEventFromEnv()
+	if err != nil {
+		t.Errorf(err.Error())
+		t.Fail()
+	}
+
+	for k, v := range want {
+		if _, ok := eventInfo.Annotations[k]; !ok {
+			t.Errorf("want %s to be present in event.Labels", k)
+			continue
+		}
+		if vv, _ := eventInfo.Annotations[k]; vv != v {
+			t.Errorf("value of %s, want: %s, got %s", k, v, vv)
+		}
+
+	}
+}
+
 func TestGetEvent_ReadSecrets(t *testing.T) {
 
 	valSt := []string{"s1", "s2"}
@@ -239,6 +293,44 @@ func Test_getMemoryLimit_Kubernetes(t *testing.T) {
 	}
 }
 
+func Test_getCPULimit_Kubernetes(t *testing.T) {
+	tests := []struct {
+		title         string
+		limitValue    string
+		expectedLimit string
+		wantAvailable bool
+	}{
+		{
+			title:         "Override test - Kubernetes environment variables present and limit is set",
+			limitValue:    "250",
+			expectedLimit: "250m",
+			wantAvailable: true,
+		},
+		{
+			title:         "Defaults test - Kubernetes environment variables present and limit is unset",
+			limitValue:    "",
+			expectedLimit: "",
+			wantAvailable: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.title, func(t *testing.T) {
+			os.Setenv("KUBERNETES_SERVICE_PORT", "6443")
+			os.Setenv("function_cpu_limit_milli", test.limitValue)
+
+			limit := getCPULimit()
+			if limit.Available != test.wantAvailable {
+				t.Errorf("Limits not available, want: %v, got: %v", test.wantAvailable, limit.Available)
+			}
+
+			if limit.Limit != test.expectedLimit {
+				t.Errorf("Limits not correct, want: `%v` got: `%v`.", test.expectedLimit, limit.Limit)
+			}
+		})
+	}
+}
+
 func Test_existingVariable_Existent(t *testing.T) {
 	tests := []struct {
 		title string
@@ -323,5 +415,54 @@ func Test_getConfig(t *testing.T) {
 				t.Errorf("want %s, but got %s", want, value)
 			}
 		})
+	}
+}
+
+func Test_buildAnnotations_RemovesNonWhitelisted(t *testing.T) {
+	whitelist := []string{"topic"}
+
+	userValues := map[string]string{
+		"com.url": "value",
+	}
+
+	out := buildAnnotations(whitelist, userValues)
+
+	if _, ok := out["com.url"]; ok {
+		t.Fail()
+	}
+
+}
+
+func Test_buildAnnotations_AllowsWhitelisted(t *testing.T) {
+	whitelist := []string{
+		"topic",
+		"schedule",
+	}
+
+	userValues := map[string]string{
+		"topic":    "function.deployed",
+		"schedule": "has schedule",
+	}
+
+	out := buildAnnotations(whitelist, userValues)
+
+	topicVal, ok := out["topic"]
+	if !ok {
+		t.Errorf("want user annotation: topic")
+		t.Fail()
+	}
+	if topicVal != userValues["topic"] {
+		t.Errorf("want user annotation: topic - got %s, want %s", topicVal, userValues["topic"])
+		t.Fail()
+	}
+
+	scheduleVal, ok := out["schedule"]
+	if !ok {
+		t.Errorf("want user annotation: schedule")
+		t.Fail()
+	}
+	if scheduleVal != userValues["schedule"] {
+		t.Errorf("want user annotation: schedule - got %s, want %s", scheduleVal, userValues["schedule"])
+		t.Fail()
 	}
 }

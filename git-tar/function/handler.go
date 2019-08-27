@@ -145,6 +145,17 @@ func Handle(req []byte) []byte {
 		os.Exit(-1)
 	}
 
+	err = checkCompatibleTemplates(stack, clonePath)
+	if err != nil {
+		log.Println("Error while checking available templates:", err.Error())
+		status.AddStatus(sdk.StatusFailure, "missing language template error : "+err.Error(), sdk.StackContext)
+		statusErr := reportStatus(status, pushEvent.SCM)
+		if statusErr != nil {
+			log.Printf(statusErr.Error())
+		}
+		os.Exit(-1)
+	}
+
 	var shrinkWrapPath string
 	shrinkWrapPath, err = shrinkwrap(pushEvent, clonePath)
 	if err != nil {
@@ -335,9 +346,9 @@ func getRawURL(scm string, repositoryURL string, repositoryOwnerLogin string, re
 	rawURL := ""
 	switch scm {
 	case GitHub:
-		rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/stack.yml", repositoryOwnerLogin, repositoryName)
+		rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/stack.yml", repositoryOwnerLogin, repositoryName, buildBranch())
 	case GitLab:
-		rawURL = fmt.Sprintf("%s/raw/master/stack.yml", repositoryURL)
+		rawURL = fmt.Sprintf("%s/raw/%s/stack.yml", repositoryURL, buildBranch())
 	}
 	if rawURL == "" {
 		return "", fmt.Errorf(`failed to find stack.yml file: cannot form proper raw URL.
@@ -359,4 +370,12 @@ func hasDockerfileFunction(functions map[string]stack.Function) bool {
 		}
 	}
 	return false
+}
+
+func buildBranch() string {
+	branch := os.Getenv("build_branch")
+	if branch == "" {
+		return "master"
+	}
+	return branch
 }
